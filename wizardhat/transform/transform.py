@@ -19,20 +19,56 @@ class Transformer:
         buffer_out (buffers.Buffer): Output data buffer.
     """
 
-    def __init__(self, buffer_in):
+    def __init__(self, buffer_in, markers=None):
         self.buffer_in = buffer_in
         self.buffer_in.event_hook += self._buffer_update_callback
+        self.set_markers(markers)
 
-    def similar_output(self):
+
+
+    def _similar_output(self):
         """Called in `__init__` when `buffer_out` has same form as `buffer_in`.
         """
-        self.buffer_out = copy.deepcopy(self.buffer_in)
-        self.buffer_out.update_pipeline_metadata(self)
-        self.buffer_out.update_pipeline_metadata(self.buffer_out)
+        buffer_out = copy.deepcopy(self.buffer_in)
+        self.set_buffer_out(buffer_out)
+
+    def set_buffer_out(self, buffer_out, update_metadata=True):
+        self.buffer_out = buffer_out
+        if update_metadata:
+            self.buffer_out.update_pipeline_metadata(self)
+
+    def set_markers(self, markers):
+        if markers is None:
+            self._markers = None
+        else:
+            self._markers = markers
+
+    def rule_markers(self, marker_ruler=None):
+        pass
+
+    @property
+    def markers(self):
+        return np.copy(self._markers)
 
     def _buffer_update_callback(self):
         """Called by `buffer_in` when new data is available to filter."""
+        if self._markers is None:
+            self._transform()
+        else:
+            self.buffer_in.last_samples
+            self._transform()
+
+    def _transform(self, markers=False):
         raise NotImplementedError()
+
+
+class MarkerRuler:
+    def __init__(self, transformer):
+        self._transformer = transformer
+
+class PeriodicMarker(MarkerRuler):
+    def __init__(self):
+        pass
 
 
 class MNETransformer(Transformer):
