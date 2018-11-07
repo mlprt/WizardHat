@@ -54,16 +54,46 @@ class Transformer:
     def set_marker_rule(self, marker_rule=None):
         """Set the transformation rule with respect to the marker stream.
 
+        The rule should be a function that is passed a marker value and returns
+        `True` if the transformation should be applied upon receiving that
+        marker value, `False` if not, and another marker value if the
+        transformation should be applied to a window starting from the next
+        nearest timestamp after that of the returned marker value, and ending
+        with the nearest preceding timestamp to the.
+
+        For example, `marker_rule=lambda x: x - 1` will result in the
+        transformation being applied to windows between markers with
+        consecutive integer values.
+
         Args:
             marker_rule (function): How to initiate transformation.
 
         """
+        # if no marker rule is given, try to determine one
         if marker_rule is None and self._markers is not None:
-            unique_markers = np.unique(self._markers.get_unstructured())
-            if len(unique_markers) == 2:
-                marker_n = np.max(unique_markers)
-                self._rule == lambda n: n == marker_n
+            current_markers = self._markers.get_unstructured()
+            unique, counts = np.unique(current_markers, return_counts=True)
+            if len(unique) == 2:
+                # assume less frequent marker is marker of interest
+                self._rule == lambda n: n == unique[np.argmin(counts)]
+            elif len(unique) == 1:
+                # only one marker in existing samples; assume any marker that
+                # is different from it is marker of interest
+                self._rule == lambda n: n != unique[0]
+            elif len(unique) >= 2:
+                # if markers ascend by constant amount, take epoch between
+                # consecutive markers
+                nonzero_markers = current_markers[current_markers > 0]
+                marker_diffs = np.diff(nonzero_markers)
+                if len(set(marker_diffs)) == 1:
+                    self._rule == lambda n: n - marker_diffs[0]
+
         else:
+            try:
+                marker_rule(1)
+            except TypeError:
+                raise ValueError("marker_rule` should be a function taking"
+                                 + " a single integer")
             self._rule = marker_rule
 
     def _buffer_update_callback(self):
@@ -75,40 +105,29 @@ class Transformer:
             timestamps = self.buffer_in.get_timestamps(last_n=last_n)
             new_marker_idxs = self._markers.idxs_from_timestamps(timestamps)
             new_markers = self._markers.get_samples_by_idxs(new_marker_idxs - 1)
-            for timestamp, marker in zip(timestamps, new_markers):
+            for idx, (timestamp, marker) in enumerate(zip(timestamps,
+                                                          new_markers)):
                 start_marker = self._rule(marker)
+                if start_marker is False:
+                    continue
+                buffer_idx = idx - len(timestamps)
                 if start_marker is True:
-                    self._transform(timestamp)
-                elif start_marker is False:
-                    pass
+                    self._transform(buffer_idx)
                 else:
                     try:
                         idx = self._open_markers.index(start_marker)
                         start_timestamp = self._open_marker_timestamps[idx]
-                        self._transform(timestamp,
-                                        start_timestamp=start_timestamp)
+                        start_idx = self.buffer_in.idxs_from_timestamps(
+                            start_timestamp)
+                        self._transform(buffer_idx, start_idx=start_idx)
+                        self._open_markers.pop(open_idx)
+                        self._open_marker_timestamps.pop(open_idx)
+                    except ValueError:
+                        self._open_markers.append(marker)
+                        self._open_marker_timestamps.append(ts)
 
-            # last_n = self.buffer_in.n_new
-            # timestamps = self.buffer_in.get_timestamps(last_n=last_n)
-            # # TODO: only check new marker timestamps? assume already synched?
-            # new_marker_idxs = self._markers.idxs_from_timestamps(timestamps)
-            # new_markers = self._markers.get_samples_by_idxs(new_marker_idxs)
-            # for idx, (timestamp, marker) in enumerate(zip(timestamps,
-            #                                               new_markers)):
-            #     start_marker = self._rule(marker)
-            #     try:
-            #         open_idx = self._open_markers.index(start_marker)
-            #         start_timestamp = self._open_marker_timestamps[open_idx]
-            #         start = self.buffer_in.idx_from_timestamp(start_timestamp)
-            #         self._transform(self.buffer_in.timestamps[-idx],
-            #                         self.buffer_in.data[start:-idx])
-            #         self._open_markers.pop(open_idx)
-            #         self._open_marker_timestamps.pop(open_idx)
-            #     except ValueError:
-            #         self._open_markers.append(marker)
-            #         self._open_marker_timestamps.append(ts)
-
-    def _transform(self, timestamp, start_timestamp=None):
+    def _transform(self, end_idx, start_idx=None):
+        """Apply the transformation at a given timestamp."""
         raise NotImplementedError()
 
 
