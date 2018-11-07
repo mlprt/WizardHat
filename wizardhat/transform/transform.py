@@ -11,6 +11,13 @@ import numpy as np
 import scipy.signal as spsig
 
 
+class TransformGroup:
+    def __init__(self, transform_spec, markers):
+        self._markers = markers
+        self._spec = transform_spec
+
+
+
 class Transformer:
     """Base class for transforming data handled by `Buffer` objects.
 
@@ -19,12 +26,11 @@ class Transformer:
         buffer_out (buffers.Buffer): Output data buffer.
     """
 
-    def __init__(self, buffer_in, markers=None):
+    def __init__(self, buffer_in, markers=None, marker_rule=None):
         self.buffer_in = buffer_in
         self.buffer_in.event_hook += self._buffer_update_callback
         self.set_markers(markers)
-
-
+        self.set_marker_rule(marker_rule)
 
     def _similar_output(self):
         """Called in `__init__` when `buffer_out` has same form as `buffer_in`.
@@ -42,33 +48,83 @@ class Transformer:
             self._markers = None
         else:
             self._markers = markers
+        self._open_markers = []
+        self._open_marker_timestamps = []
 
-    def rule_markers(self, marker_ruler=None):
-        pass
+    def set_marker_rule(self, marker_rule=None):
+        """Set the transformation rule with respect to the marker stream.
 
-    @property
-    def markers(self):
-        return np.copy(self._markers)
+        Args:
+            marker_rule (function): How to initiate transformation.
+
+        """
+        if marker_rule is None and self._markers is not None:
+            unique_markers = np.unique(self._markers.get_unstructured())
+            if len(unique_markers) == 2:
+                marker_n = np.max(unique_markers)
+                self._rule == lambda n: n == marker_n
+        else:
+            self._rule = marker_rule
 
     def _buffer_update_callback(self):
         """Called by `buffer_in` when new data is available to filter."""
         if self._markers is None:
-            self._transform()
+            self._transform(self.buffer_in.get_timestamps(last_n=1))
         else:
-            self.buffer_in.last_samples
-            self._transform()
+            last_n = self.buffer_in.n_new
+            timestamps = self.buffer_in.get_timestamps(last_n=last_n)
+            new_marker_idxs = self._markers.idxs_from_timestamps(timestamps)
+            new_markers = self._markers.get_samples_by_idxs(new_marker_idxs - 1)
+            for timestamp, marker in zip(timestamps, new_markers):
+                start_marker = self._rule(marker)
+                if start_marker is True:
+                    self._transform(timestamp)
+                elif start_marker is False:
+                    pass
+                else:
+                    try:
+                        idx = self._open_markers.index(start_marker)
+                        start_timestamp = self._open_marker_timestamps[idx]
+                        self._transform(timestamp,
+                                        start_timestamp=start_timestamp)
 
-    def _transform(self, markers=False):
+            # last_n = self.buffer_in.n_new
+            # timestamps = self.buffer_in.get_timestamps(last_n=last_n)
+            # # TODO: only check new marker timestamps? assume already synched?
+            # new_marker_idxs = self._markers.idxs_from_timestamps(timestamps)
+            # new_markers = self._markers.get_samples_by_idxs(new_marker_idxs)
+            # for idx, (timestamp, marker) in enumerate(zip(timestamps,
+            #                                               new_markers)):
+            #     start_marker = self._rule(marker)
+            #     try:
+            #         open_idx = self._open_markers.index(start_marker)
+            #         start_timestamp = self._open_marker_timestamps[open_idx]
+            #         start = self.buffer_in.idx_from_timestamp(start_timestamp)
+            #         self._transform(self.buffer_in.timestamps[-idx],
+            #                         self.buffer_in.data[start:-idx])
+            #         self._open_markers.pop(open_idx)
+            #         self._open_marker_timestamps.pop(open_idx)
+            #     except ValueError:
+            #         self._open_markers.append(marker)
+            #         self._open_marker_timestamps.append(ts)
+
+    def _transform(self, timestamp, start_timestamp=None):
         raise NotImplementedError()
 
 
-class MarkerRuler:
-    def __init__(self, transformer):
-        self._transformer = transformer
+class MarkerRuler(Transformer):
+    """Superclass for marker generators."""
+    def __init__(self, buffer_in, **kwargs):
+        super().__init__(buffer_in=buffer_in, **kwargs)
 
 class PeriodicMarker(MarkerRuler):
-    def __init__(self):
-        pass
+    """Generate markers at a constant frequency."""
+    def __init__(self, buffer_in, start_time=0, **kwargs):
+        super().__init__(buffer_in=buffer_in, **kwargs)
+
+class MarkerConverter(Transformer):
+    def __init__(self, buffer_in, **kwargs):
+        super().__init__(buffer_in, **kwargs)
 
 
 class MNETransformer(Transformer):
@@ -93,7 +149,7 @@ class MNETransformer(Transformer):
         TODO:
             * sfreq from timestamps? (not nominal)
         """
-        Transformer.__init__(self, buffer_in=buffer_in)
+        super().__init__(self, buffer_in=buffer_in)
 
         channel_types = [source_type] * len(buffer_in.ch_names)
         self.source_type = source_type
@@ -139,7 +195,7 @@ class MNEFilter(MNETransformer):
             update_interval (int): How often (in terms of input updates) to
                 filter the data.
         """
-        MNETransformer.__init__(self, buffer_in=buffer_in, sfreq=sfreq)
+        super().__init__(self, buffer_in=buffer_in, sfreq=sfreq)
         self.similar_output()
 
         self._band = (l_freq, h_freq)
@@ -147,7 +203,7 @@ class MNEFilter(MNETransformer):
         self._update_interval = update_interval
         self._count = 0
 
-    def _buffer_update_callback(self):
+    def _transform(self, timestamp=None):
         self._count += 1
         if self._count == self._update_interval:
             data = self.buffer_in.unstructured
@@ -177,7 +233,7 @@ class PSD(Transformer):
         self.indep_range = np.fft.rfftfreq(self.n_fft, 1 / self.sfreq)
         self.buffer_out = Spectra(buffer_in.ch_names, self.indep_range)
 
-        Transformer.__init__(self, buffer_in=buffer_in)
+        super().__init__(self, buffer_in=buffer_in)
 
     def _buffer_update_callback(self):
         """Called by `buffer_in` when new data is available."""
@@ -222,7 +278,7 @@ class Convolve(Transformer):
                 Default: `'direct'`. For many channels and very large
                 convolution windows, it may be faster to use `'fft'`.
         """
-        Transformer.__init__(self, buffer_in=buffer_in)
+        super().__init__(self, buffer_in=buffer_in)
         self.similar_output()
         self.conv_mode = conv_mode
         self.conv_method = conv_method
@@ -254,4 +310,4 @@ class MovingAverage(Convolve):
 
     def __init__(self, buffer_in, n_avg):
         conv_arr = np.array([1 / n_avg] * n_avg)
-        Convolve.__init__(self, buffer_in=buffer_in, conv_arr=conv_arr)
+        super().__init__(self, buffer_in=buffer_in, conv_arr=conv_arr)

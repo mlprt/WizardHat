@@ -348,13 +348,21 @@ class TimeSeries(Buffer):
         return stacked_
 
     def get_samples(self, last_n=0):
-        """Return copy of channel data, without timestamps.
+        """Return copy of data, without timestamps.
 
         Args:
             last_n (int): Number of most recent samples to return.
         """
+        return self.get_samples_by_idxs(idxs=slice(-last_n, None))
+
+    def get_samples_by_idxs(self, idxs):
+        """Return copy of given data rows, without timestamps.
+
+        Args:
+            idxs (slice or np.ndarray): Numpy indices of data rows to return.
+        """
         with self._lock:
-            return np.copy(self._data[list(self.ch_names)][-last_n:])
+            return np.copy(self._data[list(self.ch_names)][idxs])
 
     def get_unstructured(self, last_n=0):
         """Return unstructured copy of channel data, without timestamps.
@@ -380,6 +388,10 @@ class TimeSeries(Buffer):
         """
         with self._lock:
             return np.copy(self._data['time'][-last_n:])
+
+    def idxs_from_timestamps(self, timestamps):
+        idx = np.searchsorted(self.timestamps, timestamps)
+        return idxs
 
     @property
     def samples(self):
@@ -429,6 +441,11 @@ class TimeSeries(Buffer):
     def n_chan(self):
         """Number of channels."""
         return len(self.ch_names)
+
+
+class Markers(TimeSeries):
+    def __init__(self, ch_names, **kwargs):
+        super().__init__(ch_names=ch_names, channel_fmt='i4', **kwargs)
 
 
 class Spectra(TimeSeries):
