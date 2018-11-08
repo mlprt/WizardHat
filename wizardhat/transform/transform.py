@@ -72,21 +72,14 @@ class Transformer:
         # if no marker rule is given, try to determine one
         if marker_rule is None and self._markers is not None:
             current_markers = self._markers.get_unstructured()
-            unique, counts = np.unique(current_markers, return_counts=True)
-            if len(unique) == 2:
-                # assume less frequent marker is marker of interest
-                self._rule == lambda n: n == unique[np.argmin(counts)]
-            elif len(unique) == 1:
-                # only one marker in existing samples; assume any marker that
-                # is different from it is marker of interest
-                self._rule == lambda n: n != unique[0]
-            elif len(unique) >= 2:
-                # if markers ascend by constant amount, take epoch between
-                # consecutive markers
-                nonzero_markers = current_markers[current_markers > 0]
-                marker_diffs = np.diff(nonzero_markers)
-                if len(set(marker_diffs)) == 1:
-                    self._rule == lambda n: n - marker_diffs[0]
+            counts = dict(zip(*np.unique(current_markers, return_counts=True)))
+            defaults = {
+                'sparsest': lambda n, markers: n == counts[np.argmin(counts)],
+                'anybut': lambda n, markers: n != a,
+                'linear': lambda n, markers: n - np.mean(np.diff(markers[markers > 0])),
+            }
+            defaults_map = {2: 'sparse', 1: 'any', }
+            self._rule = defaults[defaults_map[len(unique)]]
 
         else:
             try:

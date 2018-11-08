@@ -7,6 +7,7 @@ operating system, or general-purpose method decorators.
 """
 
 import copy
+import inspect
 import os
 
 import numpy as np
@@ -51,6 +52,26 @@ class EventHook:
         for handler in self.__handlers:
             if handler.__self__ == in_object:
                 self -= handler
+
+class AttrDict(dict):
+    """Class that can behave like a dictionary to access attr."""
+    def __init__(self, include_methods=False, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        # set attributes to dict
+        self.__dict__ = self
+        if include_methods:
+            # get all methods defined in subclass
+            methods = inspect.getmembers(self, predicate=inspect.ismethod)
+            # will only make public methods accessible through dict
+            methods_dict = {k: v for k, v in methods if k[0] != '_'}
+            # add public methods to dict
+            self.update(methods_dict)
+
+
+class MetaStaticMethodDict(type):
+    """Metaclass that exposes a class's static methods as if a dict."""
+    def __getitem__(cls, key):
+        return getattr(cls, key)
 
 
 def deepcopy_mask(obj, memo, mask=None):
