@@ -364,6 +364,11 @@ class TimeSeries(Buffer):
         with self._lock:
             return np.copy(self._data[list(self.ch_names)][idxs])
 
+    def timestamps_from_idxs(self, idxs):
+        """Return timestamps for given rows."""
+        with self._lock
+            return np.copy(self._data["time"][idxs])
+
     def get_unstructured(self, last_n=0):
         """Return unstructured copy of channel data, without timestamps.
 
@@ -390,6 +395,7 @@ class TimeSeries(Buffer):
             return np.copy(self._data['time'][-last_n:])
 
     def idxs_from_timestamps(self, timestamps):
+        """Returns indices for (next) nearest timestamps."""
         idx = np.searchsorted(self.timestamps, timestamps)
         return idxs
 

@@ -1,8 +1,9 @@
 """Applying arbitrary transformations/calculations to `Data` objects.
 """
 
-from wizardhat.buffers import Spectra
-import wizardhat.utils as utils
+from wizardhat import buffers
+from wizardhat.transform import markers
+from wizardhat import utils
 
 import copy
 
@@ -15,7 +16,6 @@ class TransformGroup:
     def __init__(self, transform_spec, markers):
         self._markers = markers
         self._spec = transform_spec
-
 
 
 class Transformer:
@@ -71,15 +71,8 @@ class Transformer:
         """
         # if no marker rule is given, try to determine one
         if marker_rule is None and self._markers is not None:
-            current_markers = self._markers.get_unstructured()
-            counts = dict(zip(*np.unique(current_markers, return_counts=True)))
-            defaults = {
-                'sparsest': lambda n, markers: n == counts[np.argmin(counts)],
-                'anybut': lambda n, markers: n != a,
-                'linear': lambda n, markers: n - np.mean(np.diff(markers[markers > 0])),
-            }
-            defaults_map = {2: 'sparse', 1: 'any', }
-            self._rule = defaults[defaults_map[len(unique)]]
+            #current_markers = self._markers.get_unstructured()
+            self._rule = markers.notzero(None)
 
         else:
             try:
@@ -92,21 +85,28 @@ class Transformer:
     def _buffer_update_callback(self):
         """Called by `buffer_in` when new data is available to filter."""
         if self._markers is None:
-            self._transform(self.buffer_in.get_timestamps(last_n=1))
+            self._transform(None)
         else:
+            # NOTE: if markers have identical timestamps to buffer_in,
+            # this would be simpler
             last_n = self.buffer_in.n_new
             timestamps = self.buffer_in.get_timestamps(last_n=last_n)
+            # get markers with timestamps following those of new chunk
             new_marker_idxs = self._markers.idxs_from_timestamps(timestamps)
             new_markers = self._markers.get_samples_by_idxs(new_marker_idxs - 1)
             for idx, (timestamp, marker) in enumerate(zip(timestamps,
                                                           new_markers)):
                 start_marker = self._rule(marker)
                 if start_marker is False:
+                    # not an epoch flag
                     continue
                 buffer_idx = idx - len(timestamps)
                 if start_marker is True:
+                    # one-sided epoch flag
                     self._transform(buffer_idx)
                 else:
+                    # what if start and end marker appear in same update?
+                    # two-sided epoch flag
                     try:
                         idx = self._open_markers.index(start_marker)
                         start_timestamp = self._open_marker_timestamps[idx]
@@ -243,14 +243,15 @@ class PSD(Transformer):
         self.n_fft = n_samples
         self.window = window(self.n_fft).reshape((self.n_fft, 1))
         self.indep_range = np.fft.rfftfreq(self.n_fft, 1 / self.sfreq)
-        self.buffer_out = Spectra(buffer_in.ch_names, self.indep_range)
+        self.buffer_out = buffers.Spectra(buffer_in.ch_names, self.indep_range)
 
         super().__init__(self, buffer_in=buffer_in)
 
-    def _buffer_update_callback(self):
+    def _transform(self, idx, start_idx=None):
         """Called by `buffer_in` when new data is available."""
-        timestamp = self.buffer_in.last_sample["time"]
-        data = self.buffer_in.get_unstructured(last_n=self.n_fft)
+        timestamp = self.buffer_in.timestamps_from_idxs(idx)
+        window = slice(idx - self.n_fft:idx)
+        data = self.buffer_in.get_samples_by_idxs(window)
         psd = self._get_power_spectrum(data)
         self.buffer_out.update(timestamp, psd.T)
 
@@ -306,7 +307,7 @@ class Convolve(Transformer):
         else:
             raise NotImplementedError()
 
-    def _buffer_update_callback(self):
+    def _transform(self, idx, start_idx=None):
         """Called by `buffer_in` when new data is available."""
         n_new = self.buffer_in.n_new
         last_n = max(n_new + 2 * self._conv_n_edge, self.buffer_in.n_samples)
