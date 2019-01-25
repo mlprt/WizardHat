@@ -53,14 +53,19 @@ class Receiver:
     """
 
     def __init__(self, source_id=None, with_types=('',), dejitter=True,
-                 max_chunklen=0, autostart=True, window=10, **kwargs):
+                 max_chunklen=0, autostart=True, window=10,
+                 user_label='', **kwargs):
         """Instantiate LSLStreamer given length of data store in seconds.
 
         Args:
             source_id (str): Full or partial source ID for the streamed device.
-            with_types (Iterable[str]): If no streams are provided, only those
-                matching one of these types will be acquired. For example,
-                `with_types=('EEG', 'accelerometer')`.
+            with_types (Iterable[str]): Only those device streams matching
+                one of these strings will be acquired. For example, with
+                `with_types=['EEG', 'accelerometer']`, the `Receiver` will only
+                acquire streams with labels `'EEG'` and `'accelerometer'`, if
+                ble2lsl has made them available. Such stream labels are defined
+                by the device's specification in `ble2lsl` (e.g. in
+                `ble2lsl.devices.muse2016`).
             dejitter (bool): Whether to regularize inter-sample intervals.
                 If `True`, any timestamps returned by LSL are replaced by
                 evenly-spaced timestamps based on the stream's nominal sampling
@@ -69,8 +74,9 @@ class Receiver:
             max_chunklen (int): Maximum number of samples per chunk pulled
                 from the inlets. Default: 0 (determined at stream outlet).
             autostart (bool): Whether to start streaming on instantiation.
+            user_label (str): Appended to filenames for stored data.
+                May help to make session data files easier to identify.
             kwargs: Additional keyword arguments to default `buffers.TimeSeries`.
-
         """
 
         streams = get_lsl_streams()
@@ -126,10 +132,16 @@ class Receiver:
 
             # instantiate the `buffers.TimeSeries` instances
             metadata = {"pipeline": [type(self).__name__]}
+            label = info.name()
+            if not user_label == '':
+                try:
+                    label = user_label + label
+                except TypeError:
+                    raise TypeError("user_label must be a string")
             self.buffers[name] = TimeSeries.with_window(self.ch_names[name],
                                                         self.sfreq[name],
                                                         metadata=metadata,
-                                                        label=info.name(),
+                                                        label=label,
                                                         window=window,
                                                         **kwargs)
 
@@ -139,12 +151,15 @@ class Receiver:
         if autostart:
             self.start()
 
-    @classmethod
-    def record(cls, duration, **kwargs):
-        """Collect data over a finite interval, then stop."""
+    def record(cls, duration, user_label=''):
+        """Save a separate copy of data collected over a given duration.
+
+        Starts data streaming if it has not already been started.
+        """
+        if not self.
         return cls(window=duration, store_once=True, **kwargs)
 
-    def start(self):
+    def start(self, verbose=True):
         """Start data streaming.
 
         As the thread can only be started once and by default is started on
