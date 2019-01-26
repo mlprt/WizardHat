@@ -51,16 +51,13 @@ class Buffer:
 
     Args:
         metadata (dict): Arbitrary information added to instance's `.json`.
-        filename (str): User-defined filename for saving instance (meta)data.
-            By default, a name is generated based on the date, the class name
-            of the instance, the user-defined label (if specified), and an
-            incrementing integer to prevent overwrites. For example,
-            "2018-03-01_TimeSeries_somelabel_0".
         data_dir (str): Directory for saving instance (meta)data.
             May be relative (e.g. "data" or "./data") or absolute.
             Defaults to "./data".
         label (str): User-defined addition to standard filename.
-
+            Filenames are constructed from date and time, the class name
+            of the instance, and `label` (if specified). For example,
+            "2018-03-01_TimeSeries_somelabel".
     Attributes:
         filename (str): Final (generated or specified) filename for writing.
         metadata (dict): All metadata included in instance's `.json`.
@@ -73,22 +70,20 @@ class Buffer:
           Buffer will fail if it tries to update another, probably)
     """
 
-    def __init__(self, metadata=None, filename=None, data_dir='./data',
-                 label=''):
+    def __init__(self, metadata=None, data_dir='./data', buffer_label=''):
 
         # thread control
         self._lock = threading.Lock()
         self.event_hook = utils.EventHook()
 
+        self._data_dir = data_dir
+        self._buffer_label = buffer_label
+        self._files = {}
+
         # file output preparations
         if not data_dir[0] in ['.', '/']:
             data_dir = './' + data_dir
-        if filename is None:
-            filename = self._new_filename(data_dir, label)
-        utils.makedirs(filename)
-        self.filename = filename
-        self._data_dir = data_dir
-        self._label = label
+        self.add_file()
 
         # metadata
         if metadata is None:
@@ -101,6 +96,12 @@ class Buffer:
         self.metadata = metadata
         # add subclass information to pipeline metadata and write to file
         self.update_pipeline_metadata(self)
+
+    def add_file(self, file_labels=(), stop_variable=None):
+        filename = self._new_filename(self._data_dir, file_labels)
+        utils.makedirs(filename)
+        self._files[filename] = stop_variable
+        # TODO: Log/print filename
 
     @property
     def data(self):
@@ -161,21 +162,12 @@ class Buffer:
         with open(self.filename + '.json', 'w') as f:
             f.write(metadata_json)
 
-    def _new_filename(self, data_dir='data', label=''):
+    def _new_filename(self, data_dir='data', file_labels=('')):
         time_str = time.strftime("%y%m%d-%H%M%S", time.localtime())
         classname = type(self).__name__
-        if label:
-            label += '_'
 
-        filename = '{}/{}_{}_{}{{}}'.format(data_dir, time_str,
-                                            classname, label)
-        # incremental counter to prevent overwrites
-        # (based on existence of metadata file)
-        count = 0
-        while os.path.exists(filename.format(count) + '.json'):
-            count += 1
-        filename = filename.format(count)
-
+        filename = '{}/{}_{}_{}'.format(data_dir, time_str,
+                                        classname, '_'.join(file_labels))
         return filename
 
     def __deepcopy__(self, memo):
@@ -199,10 +191,11 @@ class TimeSeries(Buffer):
         * Marker channels
         * Per-channel units?
         * store_once behaviour is a bit awkward. What about long windows?
+        * Use metadata for channel_fmt, sfreq
     """
 
     def __init__(self, ch_names, n_samples=2560, sfreq=None, record=True,
-                 channel_fmt='f8', store_once=False, **kwargs):
+                 channel_fmt='f8', **kwargs):
         """Create a new `TimeSeries` object.
 
         Args:
@@ -217,9 +210,11 @@ class TimeSeries(Buffer):
                 for example, a 64-bit float is specified as `'f8'`. Types may
                 be Python base types (e.g. `float`) or NumPy base dtypes
                 (e.g. `np.float64`).
-            store_once (bool): Whether to stop storing data when window filled.
         """
         Buffer.__init__(self, **kwargs)
+        for filename in self._files:
+            if self._files[filename] is None:
+                self._files[filename] = np.inf
 
         self.sfreq = sfreq
         # if single dtype given, expand to number of channels
@@ -238,7 +233,6 @@ class TimeSeries(Buffer):
 
         self._record = record
         self._write = True
-        self._store_once = store_once
         # write remaining data to file on program exit (e.g. quit())
         if record:
             atexit.register(self.write_to_file)
@@ -304,6 +298,10 @@ class TimeSeries(Buffer):
         self._split_append(self._new)
         self.event_hook.fire()
 
+    def add_file_by_duration(self, label='', duration=None):
+        stop_timestamp = self.last_timestamp + duration
+        self.add_file(stop_variable=stop_timestamp)
+
     def write_to_file(self, force=False):
         """Write any unwritten samples to file.
 
@@ -313,11 +311,46 @@ class TimeSeries(Buffer):
         """
         if self._record or force:
             with self._lock:
-                with open(self.filename + ".csv", 'a') as f:
-                    for row in self._data[max(0, self._count):]:
-                        line = ','.join(str(n) for n in row)
+                data = np.copy(self._data[max(0, self._count):])
+
+            data_strs = [','.join(str(n) for n in row) for row in data]
+            stop_idxs = dict(zip(self._files.keys(),
+                                 np.searchsorted(data['time'],
+                                                 self._files.values())
+
+            for filename, stop_timestamp in self._files.copy().items():
+                with open(filename + ".csv", 'a') as f:
+                    for line in data_strs[:stop_idxs[filename]]
                         f.write(line + '\n')
+
+                if data[:stop_idxs][-1]['time'] > stop_timestamp:
+                    del self._files[filename]
+
         self._count = self.n_samples
+
+    @class_method
+    def from_file(cls, filepath, metadata_path=None, n_samples=None, **kwargs):
+        """Create buffer from stored data and metadata.
+        """
+        if metadata_path is None:
+            metadata_path = os.path.splitext(filepath) + '.json'
+        with open(metadata_path, 'r') as metadata_file:
+            metadata_json = metadata_file.readlines()
+            metadata = json.loads(metadata_json)
+        with open(filepath, 'r') as data_file:
+            data_str_rows = data_file.readlines()
+            data_strs = [row.split('') for row in data_str_rows]
+            # Need to exclude last line?
+
+        n_samples = n_samples if n_samples is not None else len(data_strs)
+
+        time_series = cls(metadata=metadata, n_samples=n_samples, **kwargs)
+
+        for row in data_strs[-n_samples:]:
+            time_series.update(float(row[0]), [float(v) for v in row[1:]])
+
+        return time_series
+
 
     def _split_append(self, new):
         # write out each time array contains only unwritten samples
@@ -405,6 +438,11 @@ class TimeSeries(Buffer):
         """Last-stored row (timestamp and sample)."""
         with self._lock:
             return np.copy(self._data[-1])
+
+    @property
+    def last_timestamp(self):
+        with self._lock:
+            return np.copy(self._data[-1]['time'])
 
     @property
     def n_samples(self):
