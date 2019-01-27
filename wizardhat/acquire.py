@@ -54,7 +54,7 @@ class Receiver:
 
     def __init__(self, source_id=None, with_types=('',), dejitter=True,
                  max_chunklen=0, autostart=True, window=10,
-                 user_label='', **kwargs):
+                 label='', **kwargs):
         """Instantiate LSLStreamer given length of data store in seconds.
 
         Args:
@@ -74,7 +74,7 @@ class Receiver:
             max_chunklen (int): Maximum number of samples per chunk pulled
                 from the inlets. Default: 0 (determined at stream outlet).
             autostart (bool): Whether to start streaming on instantiation.
-            user_label (str): Appended to filenames for stored data.
+            label (str): Appended to filenames for stored data.
                 May help to make session data files easier to identify.
             kwargs: Additional keyword arguments to default `buffers.TimeSeries`.
         """
@@ -132,16 +132,16 @@ class Receiver:
 
             # instantiate the `buffers.TimeSeries` instances
             metadata = {"pipeline": [type(self).__name__]}
-            label = info.name()
-            if not user_label == '':
+            label_ = info.name()
+            if not label == '':
                 try:
-                    label = user_label + label
+                    label_ += label
                 except TypeError:
-                    raise TypeError("user_label must be a string")
+                    raise TypeError("label must be a string")
             self.buffers[name] = TimeSeries.with_window(self.ch_names[name],
                                                         self.sfreq[name],
                                                         metadata=metadata,
-                                                        label=label,
+                                                        label=label_,
                                                         window=window,
                                                         **kwargs)
 

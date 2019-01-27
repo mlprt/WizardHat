@@ -83,7 +83,6 @@ class Buffer:
         # file output preparations
         if not data_dir[0] in ['.', '/']:
             data_dir = './' + data_dir
-        self.add_file()
 
         # metadata
         if metadata is None:
@@ -94,13 +93,25 @@ class Buffer:
         except TypeError:
             raise TypeError("Metadata must be a dict")
         self.metadata = metadata
+        self.add_file()
         # add subclass information to pipeline metadata and write to file
         self.update_pipeline_metadata(self)
 
-    def add_file(self, file_labels=(), stop_variable=None):
+    def add_file(self, file_labels=(), write_range=(None, None)):
+        """Add another file to store the instance's data to.
+
+        For example, used for recording intervals of data to separate files.
+
+        Args:
+            file_labels (Iterable[str]): Labels to be appended to filename.
+            write_range (float): Values used by subclass to decide to stop
+                updating this file with new data; e.g. after the duration of
+                a finite recording has elapsed.
+        """
         filename = self._new_filename(self._data_dir, file_labels)
         utils.makedirs(filename)
-        self._files[filename] = stop_variable
+        self._files[filename] = write_range
+        self._write_metadata_to_file()
         # TODO: Log/print filename
 
     @property
@@ -159,8 +170,9 @@ class Buffer:
             metadata_json = json.dumps(self.metadata, indent=4)
         except TypeError:
             raise TypeError("JSON could not serialize metadata")
-        with open(self.filename + '.json', 'w') as f:
-            f.write(metadata_json)
+        for filename in self._files:
+            with open(filename + '.json', 'w') as f:
+                f.write(metadata_json)
 
     def _new_filename(self, data_dir='data', file_labels=('')):
         time_str = time.strftime("%y%m%d-%H%M%S", time.localtime())
@@ -213,8 +225,11 @@ class TimeSeries(Buffer):
         """
         Buffer.__init__(self, **kwargs)
         for filename in self._files:
-            if self._files[filename] is None:
-                self._files[filename] = np.inf
+            if self._files[filename] == (None, None):
+                # parent class makes stop_variable of primary file None
+                # change to infinity so that will always be larger than
+                # latest timestamp (i.e. primay file always updated)
+                self._files[filename] = (-np.inf, np.inf)
 
         self.sfreq = sfreq
         # if single dtype given, expand to number of channels
@@ -230,6 +245,8 @@ class TimeSeries(Buffer):
                                     })
         except ValueError:
             raise ValueError("Number of formats must match number of channels")
+
+        self.metadata['ch_names'] = ch_names
 
         self._record = record
         self._write = True
@@ -300,7 +317,8 @@ class TimeSeries(Buffer):
 
     def add_file_by_duration(self, duration, label=''):
         stop_timestamp = self.last_timestamp + duration
-        self.add_file(stop_variable=stop_timestamp)
+        self.add_file(write_range=(float(self.last_timestamp), stop_timestamp),
+                      file_labels=(label,))
 
     def write_to_file(self, force=False):
         """Write any unwritten samples to file.
@@ -315,16 +333,17 @@ class TimeSeries(Buffer):
                 self._count = self.n_samples
 
             data_strs = [','.join(str(n) for n in row) for row in data]
-            stop_idxs = dict(zip(self._files.keys(),
-                                 np.searchsorted(data['time'],
-                                                 self._files.values())))
 
-            for filename, stop_timestamp in self._files.copy().items():
+            write_idxs = dict(zip(self._files.keys(),
+                                  np.searchsorted(data['time'],
+                                                  list(zip(self._files.values())))))
+
+            for filename, (_, stop_timestamp) in self._files.copy().items():
                 with open(filename + ".csv", 'a') as f:
-                    for line in data_strs[:stop_idxs[filename]]:
+                    for line in data_strs[slice(*write_idxs[filename][0])]:
                         f.write(line + '\n')
 
-                if data[:stop_idxs][-1]['time'] > stop_timestamp:
+                if data[:write_idxs[filename][0][1]][-1]['time'] > stop_timestamp:
                     del self._files[filename]
 
     @classmethod
@@ -336,22 +355,23 @@ class TimeSeries(Buffer):
                 By default, creates a buffer to hold the entire stored data.
         """
         if metadata_path is None:
-            metadata_path = os.path.splitext(filepath) + '.json'
+            metadata_path = os.path.splitext(filepath)[0] + '.json'
         with open(metadata_path, 'r') as metadata_file:
-            metadata_json = metadata_file.readlines()
+            metadata_json = metadata_file.read()
             metadata = json.loads(metadata_json)
         with open(filepath, 'r') as data_file:
             data_str_rows = data_file.readlines()
-            data_strs = [row.split('') for row in data_str_rows]
+            data_strs = [row.split(',') for row in data_str_rows]
             # Need to exclude last line?
 
         n_samples = n_samples if n_samples is not None else len(data_strs)
 
-        time_series = cls(metadata=metadata, n_samples=n_samples, **kwargs)
+        time_series = cls(ch_names=metadata['ch_names'],
+                          metadata=metadata, n_samples=n_samples, **kwargs)
 
-        for row in data_strs[-n_samples:]:
-            # TODO: cast entries based on channel_fmt in metadata
-            time_series.update(float(row[0]), [float(v) for v in row[1:]])
+        data = np.array([[float(v) for v in row] for row in data_strs])
+        # TODO: cast entries based on channel_fmt in metadata
+        time_series.update(data[-n_samples:, 0], data[-n_samples:, 1:])
 
         return time_series
 
@@ -365,10 +385,7 @@ class TimeSeries(Buffer):
             self._append(new[:cutoff])
             if self._count == 0:
                 self.write_to_file()
-                if self._store_once:
-                    self._write = False
-                else:
-                    self._append(new[cutoff:])
+                self._append(new[cutoff:])
 
     def _append(self, new):
         with self._lock:
