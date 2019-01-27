@@ -151,13 +151,16 @@ class Receiver:
         if autostart:
             self.start()
 
-    def record(cls, duration, user_label=''):
+    def record(cls, duration, names=None, label=''):
         """Save a separate copy of data collected over a given duration.
 
         Starts data streaming if it has not already been started.
         """
-        if not self.
-        return cls(window=duration, store_once=True, **kwargs)
+        if names is None:
+            names = self.buffers
+        for name in names:
+            self.buffers[name].add_file_by_duration(label=label,
+                                                    duration=duration)
 
     def start(self, verbose=True):
         """Start data streaming.

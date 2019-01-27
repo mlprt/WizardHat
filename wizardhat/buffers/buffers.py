@@ -298,7 +298,7 @@ class TimeSeries(Buffer):
         self._split_append(self._new)
         self.event_hook.fire()
 
-    def add_file_by_duration(self, label='', duration=None):
+    def add_file_by_duration(self, duration, label=''):
         stop_timestamp = self.last_timestamp + duration
         self.add_file(stop_variable=stop_timestamp)
 
@@ -312,25 +312,28 @@ class TimeSeries(Buffer):
         if self._record or force:
             with self._lock:
                 data = np.copy(self._data[max(0, self._count):])
+                self._count = self.n_samples
 
             data_strs = [','.join(str(n) for n in row) for row in data]
             stop_idxs = dict(zip(self._files.keys(),
                                  np.searchsorted(data['time'],
-                                                 self._files.values())
+                                                 self._files.values())))
 
             for filename, stop_timestamp in self._files.copy().items():
                 with open(filename + ".csv", 'a') as f:
-                    for line in data_strs[:stop_idxs[filename]]
+                    for line in data_strs[:stop_idxs[filename]]:
                         f.write(line + '\n')
 
                 if data[:stop_idxs][-1]['time'] > stop_timestamp:
                     del self._files[filename]
 
-        self._count = self.n_samples
-
-    @class_method
+    @classmethod
     def from_file(cls, filepath, metadata_path=None, n_samples=None, **kwargs):
         """Create buffer from stored data and metadata.
+
+        Args:
+            n_samples (int): Number of samples to store in memory.
+                By default, creates a buffer to hold the entire stored data.
         """
         if metadata_path is None:
             metadata_path = os.path.splitext(filepath) + '.json'
@@ -347,6 +350,7 @@ class TimeSeries(Buffer):
         time_series = cls(metadata=metadata, n_samples=n_samples, **kwargs)
 
         for row in data_strs[-n_samples:]:
+            # TODO: cast entries based on channel_fmt in metadata
             time_series.update(float(row[0]), [float(v) for v in row[1:]])
 
         return time_series
