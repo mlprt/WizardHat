@@ -14,8 +14,21 @@ receiver = acquire.Receiver(label='session_1')
 # e.g. to control when to record a given duration
 
 # this will create a new CSV/JSON file pair; the data for the next 5 seconds
-# will continued to be saved to the primary file created when the
+# will continue to be saved to the primary file created when the
 # Receiver was created, but will also write this interval of data
 # to the new file, which will be labelled with the Receiver label ('session_1'
 # in this case) as well as the recording label ('first_trial')
-receiver.record(duration=5, label='first_trial')
+while True:
+    trial_label = input("Enter a trial label to start a recording.\n" +
+                        "Enter 'stop' to exit program")
+    if trial_label == 'stop':
+        break
+    else:
+        duration = input("Enter a recording duration (default=5 sec). " +
+                         "The recording will begin when you press Enter: ")
+        if duration == '':
+            # use the default if the user didn't choose
+            duration = 5
+        else:
+            duration = int(duration)
+    receiver.record(duration=duration, label=trial_label)

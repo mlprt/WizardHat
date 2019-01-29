@@ -70,14 +70,14 @@ class Buffer:
           Buffer will fail if it tries to update another, probably)
     """
 
-    def __init__(self, metadata=None, data_dir='./data', buffer_label=''):
+    def __init__(self, metadata=None, data_dir='./data', label=''):
 
         # thread control
         self._lock = threading.Lock()
         self.event_hook = utils.EventHook()
 
         self._data_dir = data_dir
-        self._buffer_label = buffer_label
+        self._label = label
         self._files = {}
 
         # file output preparations
