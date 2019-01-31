@@ -151,7 +151,7 @@ class Receiver:
         if autostart:
             self.start()
 
-    def record(cls, duration, names=None, label=''):
+    def record(self, duration, names=None, label=''):
         """Save a separate copy of data collected over a given duration.
 
         Starts data streaming if it has not already been started.
